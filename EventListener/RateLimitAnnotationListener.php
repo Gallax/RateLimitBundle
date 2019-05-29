@@ -64,74 +64,76 @@ class RateLimitAnnotationListener extends BaseListener
 
         // Find the best match
         $annotations = $event->getRequest()->attributes->get('_x-rate-limit', array());
-        $rateLimit = $this->findBestMethodMatch($event->getRequest(), $annotations);
+        //$rateLimit = $this->findBestMethodMatch($event->getRequest(), $annotations);
+        foreach ($annotations as $rateLimit) {
 
-        // Another treatment before applying RateLimit ?
-        $checkedRateLimitEvent = new CheckedRateLimitEvent($event->getRequest(), $rateLimit);
-        $this->eventDispatcher->dispatch(RateLimitEvents::CHECKED_RATE_LIMIT, $checkedRateLimitEvent);
-        $rateLimit = $checkedRateLimitEvent->getRateLimit();
 
-        // No matching annotation found
-        if (! $rateLimit) {
-            return;
-        }
+            // Another treatment before applying RateLimit ?
+            $checkedRateLimitEvent = new CheckedRateLimitEvent($event->getRequest(), $rateLimit);
+            $this->eventDispatcher->dispatch(RateLimitEvents::CHECKED_RATE_LIMIT, $checkedRateLimitEvent);
+            $rateLimit = $checkedRateLimitEvent->getRateLimit();
 
-        $key = $this->getKey($event, $rateLimit, $annotations);
-
-        // Ratelimit the call
-        $rateLimitInfo = $this->rateLimitService->limitRate($key);
-        if (! $rateLimitInfo) {
-            // Create new rate limit entry for this call
-            $rateLimitInfo = $this->rateLimitService->createRate($key, $rateLimit->getLimit(), $rateLimit->getPeriod());
-            if (! $rateLimitInfo) {
-                // @codeCoverageIgnoreStart
+            // No matching annotation found
+            if (! $rateLimit) {
                 return;
-                // @codeCoverageIgnoreEnd
             }
-        }
 
+            $key = $this->getKey($event, $rateLimit, $annotations). "-". $rateLimit->getPeriod();
 
-        // Store the current rating info in the request attributes
-        $request = $event->getRequest();
-        $request->attributes->set('rate_limit_info', $rateLimitInfo);
-
-        // Reset the rate limits
-        if(time() >= $rateLimitInfo->getResetTimestamp()) {
-            $this->rateLimitService->resetRate($key);
-            $rateLimitInfo = $this->rateLimitService->createRate($key, $rateLimit->getLimit(), $rateLimit->getPeriod());
+            // Ratelimit the call
+            $rateLimitInfo = $this->rateLimitService->limitRate($key);
             if (! $rateLimitInfo) {
-                // @codeCoverageIgnoreStart
-                return;
-                // @codeCoverageIgnoreEnd
+                // Create new rate limit entry for this call
+                $rateLimitInfo = $this->rateLimitService->createRate($key, $rateLimit->getLimit(), $rateLimit->getPeriod());
+                if (! $rateLimitInfo) {
+                    // @codeCoverageIgnoreStart
+                    return;
+                    // @codeCoverageIgnoreEnd
+                }
             }
-        }
 
-        // When we exceeded our limit, return a custom error response
-        if ($rateLimitInfo->getCalls() > $rateLimitInfo->getLimit()) {
 
-            // Throw an exception if configured.
-            if ($this->getParameter('rate_response_exception')) {
-                $class = $this->getParameter('rate_response_exception');
+            // Store the current rating info in the request attributes
+            $request = $event->getRequest();
+            $request->attributes->set('rate_limit_info', $rateLimitInfo);
 
-                $e = new $class($this->getParameter('rate_response_message'), $this->getParameter('rate_response_code'));
+            // Reset the rate limits
+            if(time() >= $rateLimitInfo->getResetTimestamp()) {
+                $this->rateLimitService->resetRate($key);
+                $rateLimitInfo = $this->rateLimitService->createRate($key, $rateLimit->getLimit(), $rateLimit->getPeriod());
+                if (! $rateLimitInfo) {
+                    // @codeCoverageIgnoreStart
+                    return;
+                    // @codeCoverageIgnoreEnd
+                }
+            }
 
-                if ($e instanceof RateLimitExceptionInterface) {
-                    $e->setPayload($rateLimit->getPayload());
+            // When we exceeded our limit, return a custom error response
+            if ($rateLimitInfo->getCalls() > $rateLimitInfo->getLimit()) {
+
+                // Throw an exception if configured.
+                if ($this->getParameter('rate_response_exception')) {
+                    $class = $this->getParameter('rate_response_exception');
+
+                    $e = new $class($this->getParameter('rate_response_message'), $this->getParameter('rate_response_code'));
+
+                    if ($e instanceof RateLimitExceptionInterface) {
+                        $e->setPayload($rateLimit->getPayload());
+                    }
+
+                    throw $e;
                 }
 
-                throw $e;
+                $message = $this->getParameter('rate_response_message');
+                $code = $this->getParameter('rate_response_code');
+                $event->setController(function () use ($message, $code) {
+                    // @codeCoverageIgnoreStart
+                    return new Response($message, $code);
+                    // @codeCoverageIgnoreEnd
+                });
+                $event->stopPropagation();
             }
-
-            $message = $this->getParameter('rate_response_message');
-            $code = $this->getParameter('rate_response_code');
-            $event->setController(function () use ($message, $code) {
-                // @codeCoverageIgnoreStart
-                return new Response($message, $code);
-                // @codeCoverageIgnoreEnd
-            });
-            $event->stopPropagation();
         }
-
     }
 
 
